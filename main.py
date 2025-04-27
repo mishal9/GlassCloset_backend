@@ -18,7 +18,10 @@ try:
 except ImportError:
     pass  # dotenv is optional, but recommended for local dev
 
-app = FastAPI()
+# Get port from environment variable for Render deployment
+port = int(os.getenv("PORT", "8000"))
+
+app = FastAPI(root_path=os.getenv("ROOT_PATH", ""))
 
 # Allow CORS for local development (adjust origins as needed)
 app.add_middleware(
