@@ -21,6 +21,12 @@ except ImportError:
 # Get port from environment variable for Render deployment
 port = int(os.getenv("PORT", "8000"))
 
+# Load frontend URL from environment or use a default for email redirects
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# Add a redirect URL for the API itself
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
 app = FastAPI(root_path=os.getenv("ROOT_PATH", ""))
 
 # Allow CORS for local development (adjust origins as needed)
@@ -70,10 +76,24 @@ async def signup(email: str, password: str):
     Sign up a new user with Supabase Auth.
     """
     try:
-        result = supabase.auth.sign_up({"email": email, "password": password})
+        # Redirect to our own confirmation endpoint
+        email_redirect = f"{API_URL}/confirm-email"
+        
+        # Include the redirect URL in the sign-up options
+        result = supabase.auth.sign_up({
+            "email": email, 
+            "password": password,
+            "options": {
+                "email_redirect_to": email_redirect
+            }
+        })
+        
         if result.user is None:
             raise HTTPException(status_code=400, detail=result.error.get('message', 'Unknown error'))
-        return {"message": "User created successfully", "user_id": result.user.id}
+        return {
+            "message": "User created successfully. Please check your email to confirm your account.", 
+            "user_id": result.user.id
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Sign up failed: {str(e)}")
 
@@ -89,6 +109,34 @@ async def login(email: str, password: str):
         return {"message": "Login successful", "access_token": result.session.access_token}
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Login failed: {str(e)}")
+
+@app.get("/confirm-email")
+async def confirm_email(token_hash: str, type: str, redirect_to: str = None):
+    """
+    Handle email confirmation redirects from Supabase.
+    This endpoint receives the confirmation token from Supabase and confirms the user's email,
+    then redirects to the frontend.
+    """
+    try:
+        # The token_hash and type are provided by Supabase in the URL
+        # We need to verify the token with Supabase
+        result = supabase.auth.verify_otp({
+            "token_hash": token_hash,
+            "type": type
+        })
+        
+        # After successful verification, redirect to the frontend
+        # If redirect_to is provided, use it, otherwise use the default frontend URL
+        frontend_redirect = redirect_to or f"{FRONTEND_URL}/auth/login?confirmed=true"
+        
+        # Use FastAPI's RedirectResponse for the redirect
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=frontend_redirect)
+    except Exception as e:
+        # If there's an error, redirect to the frontend with an error parameter
+        error_redirect = f"{FRONTEND_URL}/auth/login?error=confirmation_failed"
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=error_redirect)
 
 @app.get("/health")
 async def health_check():
