@@ -7,10 +7,8 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 import google.generativeai as genai
-import tempfile
 from supabase import create_client, Client
 import jwt
-from jwt import PyJWTError
 
 try:
     from dotenv import load_dotenv

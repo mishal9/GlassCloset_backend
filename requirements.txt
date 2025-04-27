@@ -6,3 +6,4 @@ starlette
 supabase
 PyJWT
 python-dotenv
+Pillow
