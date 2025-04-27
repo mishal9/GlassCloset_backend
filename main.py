@@ -48,7 +48,8 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # Load Supabase credentials from environment
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+# Use the correct JWT secret
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") or "2HPJ6gMW5fjt/1IhU5SGm9O8rmvs5B3UMZLLZumXprwTOoX9nzdIigkoFSD4y0pc+ymbGSzJ76AWHGXokAFqwA=="
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY environment variables not set.")
 if not SUPABASE_JWT_SECRET:
