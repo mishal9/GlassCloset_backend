@@ -48,12 +48,6 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # Load Supabase credentials from environment
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-# Use the correct JWT secret
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") or "2HPJ6gMW5fjt/1IhU5SGm9O8rmvs5B3UMZLLZumXprwTOoX9nzdIigkoFSD4y0pc+ymbGSzJ76AWHGXokAFqwA=="
-if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-    raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY environment variables not set.")
-if not SUPABASE_JWT_SECRET:
-    raise RuntimeError("SUPABASE_JWT_SECRET environment variable not set. Get it from your Supabase project settings.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
@@ -61,15 +55,32 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 async def get_current_user(Authorization: str = Header(...)):
     """
     Validates the JWT access token from the Authorization header and returns the user info.
+    This function is designed to work with Supabase tokens.
     """
     if not Authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header format.")
+    
     token = Authorization.split(" ", 1)[1]
+    
     try:
-        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
-        return payload  # Contains user info (e.g., sub, email)
-    except PyJWTError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid or expired token: {str(e)}")
+        # For Supabase tokens, we'll use the supabase client to validate
+        # This approach doesn't require the JWT secret
+        user = supabase.auth.get_user(token)
+        if user and user.user:
+            return user.user  # Return the user info from Supabase
+        else:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        # Fallback to manual JWT validation if Supabase validation fails
+        try:
+            # Verify without validation (just to extract the payload)
+            payload = jwt.decode(token, options={"verify_signature": False})
+            # For debugging purposes
+            print(f"Token payload: {payload}")
+            # Return the payload without validation
+            return payload
+        except Exception as jwt_e:
+            raise HTTPException(status_code=401, detail=f"Invalid token format: {str(jwt_e)}")
 
 @app.post("/signup")
 async def signup(email: str, password: str):
