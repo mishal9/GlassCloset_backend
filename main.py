@@ -3,12 +3,16 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env if present
 load_dotenv()
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.responses import JSONResponse, RedirectResponse
 import google.generativeai as genai
 from supabase import create_client, Client
 import jwt
+import pathlib
 
 try:
     from dotenv import load_dotenv
@@ -35,6 +39,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Set up static files and templates
+static_dir = pathlib.Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+templates = Jinja2Templates(directory="templates")
 
 # Load Google Gemini API key from environment
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -211,3 +220,144 @@ async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_u
         print(f"Gemini API error: {api_exc}")
         raise HTTPException(status_code=500, detail=f"Gemini API error: {api_exc}")
 
+@app.get("/upload-form", response_class=HTMLResponse)
+async def get_upload_form(request: Request):
+    """Render the HTML form for image uploads"""
+    return templates.TemplateResponse("upload_form.html", {"request": request})
+
+@app.post("/upload-image-form", response_class=HTMLResponse)
+async def upload_image_form(request: Request, file: UploadFile = File(...), analysis_type: str = Form("basic")):
+    """Handle image uploads from the HTML form and display results"""
+    if not file.content_type.startswith("image/"):
+        return templates.TemplateResponse(
+            "upload_form.html", 
+            {"request": request, "error": "File must be an image."}
+        )
+    
+    try:
+        # Save the uploaded file
+        file_location = f"static/uploads/{file.filename}"
+        with open(file_location, "wb") as f:
+            contents = await file.read()
+            f.write(contents)
+        
+        # Process the image based on analysis type
+        import io
+        import json
+        import re
+        from PIL import Image
+        
+        try:
+            image = Image.open(io.BytesIO(contents))
+        except Exception as img_exc:
+            print(f"Image conversion error: {img_exc}")
+            return templates.TemplateResponse(
+                "upload_form.html", 
+                {"request": request, "error": "Uploaded file is not a valid image."}
+            )
+        
+        # Use Gemini model for analysis
+        model = genai.GenerativeModel('gemini-2.0-flash-exp-image-generation')
+        
+        if analysis_type == "basic":
+            prompt = (
+                "Analyze the following attributes for this clothing item only if it is fully visible: "
+                "color, type, primary color, pattern, style, weather, category, subcategory. "
+                "Return the result as a JSON object with keys: color, type, primary_color, pattern, style, weather, category, subcategory. "
+                "If an attribute cannot be determined, use null. Only return the JSON object."
+            )
+        else:  # detailed analysis
+            prompt = (
+                "Analyze this clothing item in detail and provide the following attributes: \n"
+                "1. Main color(s)\n"
+                "2. Secondary color(s) if any\n"
+                "3. Garment type (e.g., shirt, pants, dress)\n"
+                "4. Pattern (e.g., solid, striped, floral)\n"
+                "5. Material (if identifiable)\n"
+                "6. Style (e.g., casual, formal, athletic)\n"
+                "7. Season appropriateness (e.g., summer, winter, all-season)\n"
+                "8. Occasion suitability (e.g., work, casual, formal event)\n"
+                "9. Fit description (if apparent)\n"
+                "10. Brand identification (if visible)\n\n"
+                "Return the result as a JSON object with these keys: main_colors, secondary_colors, garment_type, "
+                "pattern, material, style, season, occasion, fit, brand. "
+                "If an attribute cannot be determined, use null. Only return the JSON object."
+            )
+        
+        try:
+            response = model.generate_content(
+                [prompt, image],
+                generation_config={
+                    "temperature": 0.2,
+                    "top_k": 40,
+                    "max_output_tokens": 2048
+                }
+            )
+        except Exception as gen_exc:
+            print(f"Gemini generation error: {gen_exc}")
+            return templates.TemplateResponse(
+                "upload_form.html", 
+                {"request": request, "error": f"Error generating analysis: {str(gen_exc)}"}
+            )
+        
+        def extract_json(text):
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if match:
+                return match.group(0)
+            else:
+                return None
+        
+        json_str = extract_json(response.text)
+        if not json_str:
+            print(f"No JSON object found in Gemini response: {response.text}")
+            return templates.TemplateResponse(
+                "upload_form.html", 
+                {"request": request, "error": "No JSON object found in Gemini response."}
+            )
+        
+        try:
+            attributes = json.loads(json_str)
+        except Exception as parse_exc:
+            print(f"Gemini response JSON parse error: {parse_exc}, raw JSON: {json_str}")
+            return templates.TemplateResponse(
+                "upload_form.html", 
+                {"request": request, "error": f"Failed to parse Gemini JSON: {parse_exc}"}
+            )
+        
+        # Prepare results for template
+        if analysis_type == "basic":
+            # Format basic results as a string
+            for k in attributes:
+                if attributes[k] is None:
+                    attributes[k] = "Not detected"
+            results = ", ".join(f"{k.replace('_', ' ').title()}: {v}" for k, v in attributes.items())
+            summary = None
+        else:
+            # For detailed analysis, pass the structured data
+            for k in attributes:
+                if attributes[k] is None:
+                    attributes[k] = "Not detected"
+            results = attributes
+            summary = f"This appears to be a {attributes.get('style', 'unknown style')} "\
+                      f"{attributes.get('garment_type', 'garment')} in "\
+                      f"{attributes.get('main_colors', 'unknown color')}, "\
+                      f"suitable for {attributes.get('occasion', 'various occasions')}."
+        
+        # Return the template with results
+        return templates.TemplateResponse(
+            "upload_form.html", 
+            {
+                "request": request, 
+                "results": results,
+                "summary": summary,
+                "analysis_type": analysis_type,
+                "image_path": f"/{file_location}"
+            }
+        )
+        
+    except Exception as e:
+        print(f"Error processing upload: {str(e)}")
+        return templates.TemplateResponse(
+            "upload_form.html", 
+            {"request": request, "error": f"Error processing upload: {str(e)}"}
+        )

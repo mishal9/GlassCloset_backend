@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GlassCloset - Clothing Image Analysis</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        h1, h2 {
+            color: #2c3e50;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        input[type="file"] {
+            display: block;
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f5f5f5;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+            border-left: 4px solid #3498db;
+        }
+        .image-preview {
+            max-width: 300px;
+            max-height: 300px;
+            margin: 10px 0;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .attribute {
+            margin-bottom: 8px;
+        }
+        .attribute-name {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .summary {
+            font-style: italic;
+            margin-top: 15px;
+            color: #7f8c8d;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            margin-right: 5px;
+            border-radius: 4px 4px 0 0;
+        }
+        .tab.active {
+            background-color: #3498db;
+            color: white;
+            border: 1px solid #3498db;
+        }
+        .tab:not(.active) {
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-bottom: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>GlassCloset - Clothing Image Analysis</h1>
+    
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('basic')">Basic Analysis</div>
+            <div class="tab" onclick="switchTab('detailed')">Detailed Analysis</div>
+        </div>
+        
+        <form id="uploadForm" action="/upload-image-form" method="post" enctype="multipart/form-data">
+            <input type="hidden" id="analysisType" name="analysis_type" value="basic">
+            
+            <div class="form-group">
+                <label for="file">Select an image of clothing to analyze:</label>
+                <input type="file" id="file" name="file" accept="image/*" required>
+            </div>
+            
+            <div class="form-group">
+                <button type="submit">Analyze Image</button>
+            </div>
+        </form>
+    </div>
+    
+    {% if results %}
+    <div class="container results">
+        <h2>Analysis Results</h2>
+        
+        {% if image_path %}
+        <div>
+            <img src="{{ image_path }}" alt="Uploaded image" class="image-preview">
+        </div>
+        {% endif %}
+        
+        {% if summary %}
+        <div class="summary">
+            <p>{{ summary }}</p>
+        </div>
+        {% endif %}
+        
+        {% if analysis_type == "basic" %}
+            <div>
+                <p>{{ results }}</p>
+            </div>
+        {% else %}
+            {% for key, value in results.items() %}
+            <div class="attribute">
+                <span class="attribute-name">{{ key|replace('_', ' ')|title }}:</span> {{ value }}
+            </div>
+            {% endfor %}
+        {% endif %}
+    </div>
+    {% endif %}
+    
+    <script>
+        function switchTab(type) {
+            // Update hidden input
+            document.getElementById('analysisType').value = type;
+            
+            // Update tab styling
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => {
+                if ((type === 'basic' && tab.textContent.includes('Basic')) || 
+                    (type === 'detailed' && tab.textContent.includes('Detailed'))) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+        }
+    </script>
+</body>
+</html>
