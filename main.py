@@ -400,6 +400,8 @@ async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_u
                     image_data=contents,
                     file_name=file.filename
                 )
+
+                print("Clothing item: ", clothing_item.__dict__)
                 
                 # Check if 'id' exists in the response, otherwise look for alternative keys
                 if isinstance(clothing_item, dict):
