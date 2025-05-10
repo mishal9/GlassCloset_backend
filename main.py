@@ -297,7 +297,7 @@ async def store_image_in_storage(user_id: str, image_data: bytes, file_name: str
         
         result = supabase.storage.from_(bucket_name).upload(
             path=unique_filename,
-            file=(unique_filename, file_obj),
+            file=image_data,
             file_options={"content-type": f"image/{file_ext[1:]}"}
         )
         print("Upload image result: ",result)
