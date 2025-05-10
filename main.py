@@ -401,8 +401,21 @@ async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_u
                     file_name=file.filename
                 )
                 
-                result["clothing_item_id"] = clothing_item["id"]
-                result["image_url"] = clothing_item["image_url"]
+                # Check if 'id' exists in the response, otherwise look for alternative keys
+                if isinstance(clothing_item, dict):
+                    if "id" in clothing_item:
+                        result["clothing_item_id"] = clothing_item["id"]
+                    elif "clothing_id" in clothing_item:
+                        result["clothing_item_id"] = clothing_item["clothing_id"]
+                    else:
+                        # If no ID field is found, just use the first available key as identifier
+                        # or log that we couldn't find an ID
+                        print(f"Warning: No ID field found in clothing_item response: {clothing_item.keys()}")
+                        result["clothing_item_id"] = None
+                    
+                    # Only add image_url if it exists in the response
+                    if "image_url" in clothing_item:
+                        result["image_url"] = clothing_item["image_url"]
                 
             return JSONResponse(result)
         except ValueError as ve:
