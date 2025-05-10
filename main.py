@@ -358,11 +358,11 @@ async def get_clothing_items(user=Depends(get_current_user)):
     """
     try:
         # Get the user ID from the authenticated user
-        user_id = user.id
+        user_id = user['sub']
         
         # Query the clothing_items table for items belonging to this user
         result = supabase.table("clothing_items").select("*").eq("user_id", user_id).execute()
-        
+        print("Clothing items: ", result.data) 
         return {"clothing_items": result.data}
     except Exception as e:
         print(f"Error retrieving clothing items: {e}")
