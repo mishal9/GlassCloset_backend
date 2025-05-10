@@ -291,9 +291,13 @@ async def store_image_in_storage(user_id: str, image_data: bytes, file_name: str
             supabase.storage.create_bucket(bucket_name, {'public': True})
         
         # Upload the file to storage
+        # Convert bytes to BytesIO object for Supabase upload
+        file_obj = io.BytesIO(image_data)
+        file_obj.name = unique_filename  # This is important for Supabase
+        
         result = supabase.storage.from_(bucket_name).upload(
             path=unique_filename,
-            file=image_data,
+            file=file_obj,
             file_options={"content-type": f"image/{file_ext[1:]}"}
         )
         
