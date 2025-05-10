@@ -4,6 +4,7 @@ import json
 import re
 import pathlib
 import jwt
+import time
 from typing import Dict, Any, Optional, Union
 from PIL import Image
 
@@ -255,9 +256,115 @@ async def analyze_clothing_image(
     print("Attributes: ", attributes)
     return attributes
 
+async def store_image_in_storage(user_id: str, image_data: bytes, file_name: str) -> str:
+    """
+    Store an image in Supabase Storage and return the public URL
+    
+    Args:
+        user_id: The user ID to associate the image with
+        image_data: The binary image data
+        file_name: Original file name (will be modified to ensure uniqueness)
+        
+    Returns:
+        Public URL to the stored image
+    """
+    try:
+        # Create a unique file name to avoid collisions
+        # Extract file extension from original name
+        file_ext = os.path.splitext(file_name)[1].lower()
+        if not file_ext:
+            file_ext = ".jpg"  # Default to jpg if no extension
+            
+        # Create a unique filename with timestamp and user ID
+        timestamp = int(time.time())
+        unique_filename = f"{user_id}_{timestamp}{file_ext}"
+        
+        # The bucket name - you need to create this bucket in Supabase dashboard first
+        bucket_name = "clothing-images"
+        
+        # Check if bucket exists, create if not
+        buckets = supabase.storage.list_buckets()
+        bucket_exists = any(bucket.name == bucket_name for bucket in buckets)
+        
+        if not bucket_exists:
+            # Create the bucket with public access
+            supabase.storage.create_bucket(bucket_name, {'public': True})
+        
+        # Upload the file to storage
+        result = supabase.storage.from_(bucket_name).upload(
+            path=unique_filename,
+            file=image_data,
+            file_options={"content-type": f"image/{file_ext[1:]}"}
+        )
+        
+        # Get the public URL for the file
+        public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
+        
+        return public_url
+    except Exception as e:
+        print(f"Error storing image: {e}")
+        raise e
+
+async def store_clothing_item(user_id: str, attributes: Dict[str, Any], image_data: Optional[bytes] = None, file_name: Optional[str] = None):
+    """
+    Store clothing item attributes in Supabase
+    
+    Args:
+        user_id: The user ID to associate the clothing item with
+        attributes: Dictionary of clothing attributes
+        image_data: Optional binary image data to store
+        file_name: Optional original file name for the image
+        
+    Returns:
+        The created clothing item record
+    """
+    try:
+        # Store the image if provided and get the URL
+        image_url = None
+        if image_data and file_name:
+            image_url = await store_image_in_storage(user_id, image_data, file_name)
+        
+        # Create a new record in the clothing_items table
+        clothing_item = {
+            "user_id": user_id,
+            "attributes": attributes,
+            "image_url": image_url,
+            # Add any additional metadata fields as needed
+        }
+        
+        result = supabase.table("clothing_items").insert(clothing_item).execute()
+        
+        if len(result.data) == 0:
+            raise ValueError("Failed to store clothing item in database")
+            
+        return result.data[0]
+    except Exception as e:
+        print(f"Error storing clothing item: {e}")
+        raise e
+
+@app.get("/clothing-items")
+async def get_clothing_items(user=Depends(get_current_user)):
+    """
+    Retrieve all clothing items for the authenticated user
+    
+    Returns:
+        List of clothing items with their attributes
+    """
+    try:
+        # Get the user ID from the authenticated user
+        user_id = user.id
+        
+        # Query the clothing_items table for items belonging to this user
+        result = supabase.table("clothing_items").select("*").eq("user_id", user_id).execute()
+        
+        return {"clothing_items": result.data}
+    except Exception as e:
+        print(f"Error retrieving clothing items: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve clothing items: {str(e)}")
+
 @app.post("/analyze-image")
-async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_user)):
-    """API endpoint for analyzing clothing images"""
+async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_user), store: bool = Form(True)):
+    """API endpoint for analyzing clothing images and optionally storing the results"""
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image.")
 
@@ -273,12 +380,29 @@ async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_u
         try:
             attributes = await analyze_clothing_image(image, "detailed")
             analysis_str = ", ".join(f"{k}: {v}" for k, v in attributes.items())
-            return JSONResponse({"analysis": analysis_str})
+            
+            result = {"analysis": analysis_str, "attributes": attributes}
+            
+            # Store the clothing item if requested
+            if store:
+                # Get the user ID from the authenticated user
+                user_id = user.id
+                
+                # Store the clothing item in Supabase along with the image
+                clothing_item = await store_clothing_item(
+                    user_id=user_id, 
+                    attributes=attributes,
+                    image_data=contents,
+                    file_name=file.filename
+                )
+                
+                result["clothing_item_id"] = clothing_item["id"]
+                result["image_url"] = clothing_item["image_url"]
+                
+            return JSONResponse(result)
         except ValueError as ve:
             raise HTTPException(status_code=500, detail=str(ve))
-        except json.JSONDecodeError as je:
-            raise HTTPException(status_code=500, detail=f"Failed to parse Gemini JSON: {je}")
-            
+
     except Exception as api_exc:
         print(f"Gemini API error: {api_exc}")
         raise HTTPException(status_code=500, detail=f"Gemini API error: {api_exc}")
