@@ -241,8 +241,12 @@ async def upload_image_form(request: Request, file: UploadFile = File(...), anal
         )
     
     try:
+        # Ensure the uploads directory exists
+        upload_dir = "static/uploads"
+        os.makedirs(upload_dir, exist_ok=True)
+        
         # Save the uploaded file
-        file_location = f"static/uploads/{file.filename}"
+        file_location = f"{upload_dir}/{file.filename}"
         with open(file_location, "wb") as f:
             contents = await file.read()
             f.write(contents)
