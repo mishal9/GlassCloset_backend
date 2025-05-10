@@ -1,19 +1,22 @@
 import os
-from dotenv import load_dotenv
+import io
+import json
+import re
+import pathlib
+import jwt
+from typing import Dict, Any, Optional, Union
+from PIL import Image
 
-# Load environment variables from .env if present
-load_dotenv()
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse
 import google.generativeai as genai
 from supabase import create_client, Client
-import jwt
-import pathlib
 
+# Load environment variables from .env if present
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -168,14 +171,95 @@ async def health_check():
     """Health check endpoint to verify the API is running."""
     return {"status": "healthy", "message": "API is up and running"}
 
+# Helper functions for image analysis
+def extract_json(text: str) -> Optional[str]:
+    """Extract JSON object from text response"""
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        return match.group(0)
+    return None
+
+def get_gemini_model():
+    """Get configured Gemini model for image analysis"""
+    return genai.GenerativeModel('gemini-2.0-flash-exp-image-generation')
+
+def get_detailed_prompt() -> str:
+    """Get detailed analysis prompt for Gemini"""
+    return (
+        "Analyze this clothing item in detail and provide the following attributes: \n"
+        "1. Main color(s)\n"
+        "2. Secondary color(s) if any\n"
+        "3. Garment type (e.g., shirt, pants, dress)\n"
+        "4. Pattern (e.g., solid, striped, floral)\n"
+        "5. Material (if identifiable)\n"
+        "6. Style (e.g., casual, formal, athletic)\n"
+        "7. Season appropriateness (e.g., summer, winter, all-season)\n"
+        "8. Occasion suitability (e.g., work, casual, formal event)\n"
+        "9. Fit description (if apparent)\n"
+        "10. Brand identification (if visible)\n\n"
+        "Return the result as a JSON object with these keys: main_colors, secondary_colors, garment_type, "
+        "pattern, material, style, season, occasion, fit, brand. "
+        "If an attribute cannot be determined, use null. Only return the JSON object."
+    )
+
+def get_basic_prompt() -> str:
+    """Get basic analysis prompt for Gemini"""
+    return (
+        "Analyze the following attributes for this clothing item only if it is fully visible: "
+        "color, type, primary color, pattern, style, weather, category, subcategory. "
+        "Return the result as a JSON object with keys: color, type, primary_color, pattern, style, weather, category, subcategory. "
+        "If an attribute cannot be determined, use null. Only return the JSON object."
+    )
+
+async def analyze_clothing_image(
+    image: Image.Image, 
+    analysis_type: str = "detailed",
+    temperature: float = 0.0,
+    top_k: int = 1
+) -> Dict[str, Any]:
+    """
+    Analyze clothing image using Gemini AI
+    
+    Args:
+        image: PIL Image object
+        analysis_type: 'basic' or 'detailed'
+        temperature: Temperature for generation
+        top_k: Top-k parameter for generation
+        
+    Returns:
+        Dictionary of attributes
+    """
+    model = get_gemini_model()
+    prompt = get_basic_prompt() if analysis_type == "basic" else get_detailed_prompt()
+    
+    response = model.generate_content(
+        [prompt, image],
+        generation_config={
+            "temperature": temperature,
+            "top_k": top_k,
+            "max_output_tokens": 2048
+        }
+    )
+    
+    json_str = extract_json(response.text)
+    if not json_str:
+        print(f"No JSON object found in Gemini response: {response.text}")
+        raise ValueError("No JSON object found in Gemini response.")
+        
+    attributes = json.loads(json_str)
+    
+    # Replace all null values with 'Not detected' for consistency
+    for k in attributes:
+        if attributes[k] is None:
+            attributes[k] = "Not detected"
+            
+    return attributes
+
 @app.post("/analyze-image")
 async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """API endpoint for analyzing clothing images"""
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image.")
-    import io
-    import json
-    import re
-    from PIL import Image
 
     try:
         contents = await file.read()
@@ -185,43 +269,16 @@ async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_u
             print(f"Image conversion error: {img_exc}")
             raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.")
 
-        # Use Gemini model for attribute extraction
-        model = genai.GenerativeModel('gemini-2.0-flash-exp-image-generation')
-        prompt = (
-            "Analyze the following attributes for this clothing item only if it is fully visible: "
-            "color, type, primary color, pattern, style, weather, category, subcategory. "
-            "Return the result as a JSON object with keys: color, type, primary_color, pattern, style, weather, category, subcategory. "
-            "If an attribute cannot be determined, use null. Only return the JSON object."
-        )
-        response = model.generate_content(
-            [prompt, image],
-            generation_config={
-                "temperature": 0,
-                "top_k": 1,
-                "max_output_tokens": 2048
-            }
-        )
-        def extract_json(text):
-            match = re.search(r'\{.*\}', text, re.DOTALL)
-            if match:
-                return match.group(0)
-            else:
-                return None
-        json_str = extract_json(response.text)
-        if not json_str:
-            print(f"No JSON object found in Gemini response: {response.text}")
-            raise HTTPException(status_code=500, detail="No JSON object found in Gemini response.")
+        # Analyze the image with detailed settings
         try:
-            attributes = json.loads(json_str)
-        except Exception as parse_exc:
-            print(f"Gemini response JSON parse error: {parse_exc}, raw JSON: {json_str}")
-            raise HTTPException(status_code=500, detail=f"Failed to parse Gemini JSON: {parse_exc}")
-        # Replace all null values with 'None' for consistency
-        for k in attributes:
-            if attributes[k] is None:
-                attributes[k] = "None"
-        analysis_str = ", ".join(f"{k}: {v}" for k, v in attributes.items())
-        return JSONResponse({"analysis": analysis_str})
+            attributes = await analyze_clothing_image(image, "detailed")
+            analysis_str = ", ".join(f"{k}: {v}" for k, v in attributes.items())
+            return JSONResponse({"analysis": analysis_str})
+        except ValueError as ve:
+            raise HTTPException(status_code=500, detail=str(ve))
+        except json.JSONDecodeError as je:
+            raise HTTPException(status_code=500, detail=f"Failed to parse Gemini JSON: {je}")
+            
     except Exception as api_exc:
         print(f"Gemini API error: {api_exc}")
         raise HTTPException(status_code=500, detail=f"Gemini API error: {api_exc}")
@@ -251,12 +308,7 @@ async def upload_image_form(request: Request, file: UploadFile = File(...), anal
             contents = await file.read()
             f.write(contents)
         
-        # Process the image based on analysis type
-        import io
-        import json
-        import re
-        from PIL import Image
-        
+        # Process the image
         try:
             image = Image.open(io.BytesIO(contents))
         except Exception as img_exc:
@@ -266,105 +318,46 @@ async def upload_image_form(request: Request, file: UploadFile = File(...), anal
                 {"request": request, "error": "Uploaded file is not a valid image."}
             )
         
-        # Use Gemini model for analysis
-        model = genai.GenerativeModel('gemini-2.0-flash-exp-image-generation')
-        
-        if analysis_type == "basic":
-            prompt = (
-                "Analyze the following attributes for this clothing item only if it is fully visible: "
-                "color, type, primary color, pattern, style, weather, category, subcategory. "
-                "Return the result as a JSON object with keys: color, type, primary_color, pattern, style, weather, category, subcategory. "
-                "If an attribute cannot be determined, use null. Only return the JSON object."
-            )
-        else:  # detailed analysis
-            prompt = (
-                "Analyze this clothing item in detail and provide the following attributes: \n"
-                "1. Main color(s)\n"
-                "2. Secondary color(s) if any\n"
-                "3. Garment type (e.g., shirt, pants, dress)\n"
-                "4. Pattern (e.g., solid, striped, floral)\n"
-                "5. Material (if identifiable)\n"
-                "6. Style (e.g., casual, formal, athletic)\n"
-                "7. Season appropriateness (e.g., summer, winter, all-season)\n"
-                "8. Occasion suitability (e.g., work, casual, formal event)\n"
-                "9. Fit description (if apparent)\n"
-                "10. Brand identification (if visible)\n\n"
-                "Return the result as a JSON object with these keys: main_colors, secondary_colors, garment_type, "
-                "pattern, material, style, season, occasion, fit, brand. "
-                "If an attribute cannot be determined, use null. Only return the JSON object."
-            )
-        
+        # Analyze the image with appropriate settings for web form
         try:
-            response = model.generate_content(
-                [prompt, image],
-                generation_config={
-                    "temperature": 0.2,
-                    "top_k": 40,
-                    "max_output_tokens": 2048
+            attributes = await analyze_clothing_image(
+                image, 
+                analysis_type,
+                temperature=0.2,  # Slightly higher temperature for web form
+                top_k=40          # Higher diversity for web form
+            )
+            
+            # Prepare results for template
+            if analysis_type == "basic":
+                # Format basic results as a string
+                results = ", ".join(f"{k.replace('_', ' ').title()}: {v}" for k, v in attributes.items())
+                summary = None
+            else:
+                # For detailed analysis, pass the structured data
+                results = attributes
+                summary = f"This appears to be a {attributes.get('style', 'unknown style')} "\
+                          f"{attributes.get('garment_type', 'garment')} in "\
+                          f"{attributes.get('main_colors', 'unknown color')}, "\
+                          f"suitable for {attributes.get('occasion', 'various occasions')}."
+            
+            # Return the template with results
+            return templates.TemplateResponse(
+                "upload_form.html", 
+                {
+                    "request": request, 
+                    "results": results,
+                    "summary": summary,
+                    "analysis_type": analysis_type,
+                    "image_path": f"/{file_location}"
                 }
             )
-        except Exception as gen_exc:
-            print(f"Gemini generation error: {gen_exc}")
+            
+        except ValueError as ve:
             return templates.TemplateResponse(
                 "upload_form.html", 
-                {"request": request, "error": f"Error generating analysis: {str(gen_exc)}"}
+                {"request": request, "error": str(ve)}
             )
-        
-        def extract_json(text):
-            match = re.search(r'\{.*\}', text, re.DOTALL)
-            if match:
-                return match.group(0)
-            else:
-                return None
-        
-        json_str = extract_json(response.text)
-        if not json_str:
-            print(f"No JSON object found in Gemini response: {response.text}")
-            return templates.TemplateResponse(
-                "upload_form.html", 
-                {"request": request, "error": "No JSON object found in Gemini response."}
-            )
-        
-        try:
-            attributes = json.loads(json_str)
-        except Exception as parse_exc:
-            print(f"Gemini response JSON parse error: {parse_exc}, raw JSON: {json_str}")
-            return templates.TemplateResponse(
-                "upload_form.html", 
-                {"request": request, "error": f"Failed to parse Gemini JSON: {parse_exc}"}
-            )
-        
-        # Prepare results for template
-        if analysis_type == "basic":
-            # Format basic results as a string
-            for k in attributes:
-                if attributes[k] is None:
-                    attributes[k] = "Not detected"
-            results = ", ".join(f"{k.replace('_', ' ').title()}: {v}" for k, v in attributes.items())
-            summary = None
-        else:
-            # For detailed analysis, pass the structured data
-            for k in attributes:
-                if attributes[k] is None:
-                    attributes[k] = "Not detected"
-            results = attributes
-            summary = f"This appears to be a {attributes.get('style', 'unknown style')} "\
-                      f"{attributes.get('garment_type', 'garment')} in "\
-                      f"{attributes.get('main_colors', 'unknown color')}, "\
-                      f"suitable for {attributes.get('occasion', 'various occasions')}."
-        
-        # Return the template with results
-        return templates.TemplateResponse(
-            "upload_form.html", 
-            {
-                "request": request, 
-                "results": results,
-                "summary": summary,
-                "analysis_type": analysis_type,
-                "image_path": f"/{file_location}"
-            }
-        )
-        
+
     except Exception as e:
         print(f"Error processing upload: {str(e)}")
         return templates.TemplateResponse(
