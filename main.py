@@ -325,9 +325,10 @@ async def store_clothing_item(user_id: str, attributes: Dict[str, Any], image_da
     """
     try:
         # Store the image if provided and get the URL
-        image_url = None
-        if image_data and file_name:
-            image_url = await store_image_in_storage(user_id, image_data, file_name)
+        image_url = "https://www.google.com"
+        # TODO: Store the image in Supabase Storage
+        #if image_data and file_name:
+        #    image_url = await store_image_in_storage(user_id, image_data, file_name)
         
         # Create a new record in the clothing_items table
         clothing_item = {
