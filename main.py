@@ -42,8 +42,14 @@ app.add_middleware(
 
 # Set up static files and templates
 static_dir = pathlib.Path(__file__).parent / "static"
+# Create static directory if it doesn't exist
+static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-templates = Jinja2Templates(directory="templates")
+
+# Create templates directory if it doesn't exist
+templates_dir = pathlib.Path(__file__).parent / "templates"
+templates_dir.mkdir(exist_ok=True)
+templates = Jinja2Templates(directory=str(templates_dir))
 
 # Load Google Gemini API key from environment
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
