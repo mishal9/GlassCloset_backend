@@ -252,7 +252,7 @@ async def analyze_clothing_image(
     for k in attributes:
         if attributes[k] is None:
             attributes[k] = "Not detected"
-            
+    print("Attributes: ", attributes)
     return attributes
 
 @app.post("/analyze-image")
