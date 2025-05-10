@@ -300,7 +300,7 @@ async def store_image_in_storage(user_id: str, image_data: bytes, file_name: str
             file=(unique_filename, file_obj),
             file_options={"content-type": f"image/{file_ext[1:]}"}
         )
-        print(result)
+        print("Upload image result: ",result)
 
         # Get the public URL for the file
         public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
