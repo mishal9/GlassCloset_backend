@@ -65,8 +65,12 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # Load Supabase credentials from environment
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+# Use the service role key for backend operations (bypasses RLS)
+# If service key is not available, fall back to anon key
+supabase_key = SUPABASE_SERVICE_KEY if SUPABASE_SERVICE_KEY else SUPABASE_ANON_KEY
+supabase: Client = create_client(SUPABASE_URL, supabase_key)
 
 # JWT Auth Dependency
 async def get_current_user(Authorization: str = Header(...)):
@@ -92,8 +96,6 @@ async def get_current_user(Authorization: str = Header(...)):
         try:
             # Verify without validation (just to extract the payload)
             payload = jwt.decode(token, options={"verify_signature": False})
-            # For debugging purposes
-            print(f"Token payload: {payload}")
             # Return the payload without validation
             return payload
         except Exception as jwt_e:
@@ -253,7 +255,7 @@ async def analyze_clothing_image(
     for k in attributes:
         if attributes[k] is None:
             attributes[k] = "Not detected"
-    print("Attributes: ", attributes)
+    print("Clothing Attributes: ", attributes)
     return attributes
 
 async def store_image_in_storage(user_id: str, image_data: bytes, file_name: str) -> str:
@@ -300,11 +302,9 @@ async def store_image_in_storage(user_id: str, image_data: bytes, file_name: str
             file=image_data,
             file_options={"content-type": f"image/{file_ext[1:]}"}
         )
-        print("Upload image result: ",result)
 
         # Get the public URL for the file
         public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
-        
         return public_url
     except Exception as e:
         print(f"Error storing image: {e}")
@@ -388,11 +388,10 @@ async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_u
             analysis_str = ", ".join(f"{k}: {v}" for k, v in attributes.items())
             
             result = {"analysis": analysis_str, "attributes": attributes}
-            
             # Store the clothing item if requested
             if store:
                 # Get the user ID from the authenticated user
-                user_id = user.id
+                user_id = user['sub']
                 
                 # Store the clothing item in Supabase along with the image
                 clothing_item = await store_clothing_item(
@@ -401,25 +400,16 @@ async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_u
                     image_data=contents,
                     file_name=file.filename
                 )
-
-                print("Clothing item: ", clothing_item.__dict__)
                 
                 # Check if 'id' exists in the response, otherwise look for alternative keys
                 if isinstance(clothing_item, dict):
                     if "id" in clothing_item:
                         result["clothing_item_id"] = clothing_item["id"]
-                    elif "clothing_id" in clothing_item:
-                        result["clothing_item_id"] = clothing_item["clothing_id"]
-                    else:
-                        # If no ID field is found, just use the first available key as identifier
-                        # or log that we couldn't find an ID
-                        print(f"Warning: No ID field found in clothing_item response: {clothing_item.keys()}")
-                        result["clothing_item_id"] = None
                     
                     # Only add image_url if it exists in the response
                     if "image_url" in clothing_item:
                         result["image_url"] = clothing_item["image_url"]
-                
+            print("Clothing item Analysis Result: ", result)
             return JSONResponse(result)
         except ValueError as ve:
             raise HTTPException(status_code=500, detail=str(ve))
