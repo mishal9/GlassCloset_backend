@@ -368,6 +368,39 @@ async def get_clothing_items(user=Depends(get_current_user)):
         print(f"Error retrieving clothing items: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve clothing items: {str(e)}")
 
+@app.delete("/clothing-items/{item_id}")
+async def delete_clothing_item(item_id: str, user=Depends(get_current_user)):
+    """
+    Delete a clothing item by ID for the authenticated user
+    
+    Args:
+        item_id: The ID of the clothing item to delete
+        user: The authenticated user
+        
+    Returns:
+        Success message with the deleted item ID
+    """
+    try:
+        # Get the user ID from the authenticated user
+        user_id = user['sub']
+        
+        # First, check if the item exists and belongs to this user
+        item_check = supabase.table("clothing_items").select("*").eq("id", item_id).eq("user_id", user_id).execute()
+        
+        if not item_check.data:
+            raise HTTPException(status_code=404, detail=f"Clothing item with ID {item_id} not found or does not belong to you")
+        
+        # Delete the item from the database
+        result = supabase.table("clothing_items").delete().eq("id", item_id).eq("user_id", user_id).execute()
+        
+        return {"success": True, "message": f"Clothing item with ID {item_id} deleted successfully"}
+    except HTTPException as he:
+        # Re-raise HTTP exceptions as-is
+        raise he
+    except Exception as e:
+        print(f"Error deleting clothing item: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete clothing item: {str(e)}")
+
 @app.post("/analyze-image")
 async def analyze_image(file: UploadFile = File(...), user=Depends(get_current_user), store: bool = Form(True)):
     """API endpoint for analyzing clothing images and optionally storing the results"""
